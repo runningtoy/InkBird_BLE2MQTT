@@ -1,0 +1,19 @@
+# iBBQ-Gateway 
+
+an ESP32 Based iBBQ (Inkbird) BLE to MQTT Gateway
+
+## Requirements
+
+## Usage
+
+After flashing the device you should connect to your WiFi, it should connect to your iBBQ Device and starts to publish data
+
+## Features
+
+* Automatically connects to iBBQ Bluetooth BBQ thermometers (tested with IBT-6X)
+* Adapts amount of channels to connected thermometer
+* Should work with most ESP32 boards available
+* Should work with iBBQ based Bluetooth BBQ thermometers with up to 8 channels
+
+## Protocol description
+(https://gist.github.com/uucidl/b9c60b6d36d8080d085a8e3310621d64)
