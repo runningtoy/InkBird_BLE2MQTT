@@ -7,6 +7,7 @@ an ESP32 Based iBBQ (Inkbird) BLE to MQTT Gateway
 ## Usage
 
 After flashing the device you should connect to your WiFi, it should connect to your iBBQ Device and starts to publish data
+rename the `credentials.example.h` to `credentials.h` and edit it to your needs
 
 ## Features
 
