@@ -18,6 +18,8 @@ rename the `credentials.example.h` to `credentials.h` and edit it to your needs
 * Publish temperature (Celsius) as MQTT Topics
 * Publish battery level as MQTT Topic
 
+## ToDO
+[] Battery readings are faulty, BigEndian?LittleEndian? i do not know, nothing works as expeced
 
 ## Protocol description
 (https://gist.github.com/uucidl/b9c60b6d36d8080d085a8e3310621d64)
