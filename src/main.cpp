@@ -10,16 +10,12 @@
 #include "credentials.h"
 #include <PubSubClient.h>
 
-
+#include <rom/rtc.h>
+#include <esp_int_wdt.h>
+#include <esp_task_wdt.h>
 
 WiFiClient espClient;
 PubSubClient mqttclient(espClient);
-
-// static BLEUUID accountVerifyUUID("0000fff2-0000-1000-8000-00805f9b34fb");
-// static BLEUUID realtimeData("0000fff4-0000-1000-8000-00805f9b34fb");
-// static BLEUUID settings("0000fff5-0000-1000-8000-00805f9b34fb");
-// static BLEUUID settingsResult("0000fff1-0000-1000-8000-00805f9b34fb");
-// static BLEUUID historyData("0000fff3-0000-1000-8000-00805f9b34fb");
 
 static uint8_t credentials[] = {0x21, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0xb8, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00};
 static uint8_t enableRealTimeData[] = {0x0B, 0x01, 0x00, 0x00, 0x00, 0x00};
@@ -33,12 +29,12 @@ static BLEUUID SettingsData(BLEUUID((uint16_t)0xfff5));
 static BLEUUID AccountAndVerify(BLEUUID((uint16_t)0xfff2));
 static BLEUUID SettingsResults(BLEUUID((uint16_t)0xfff1));
 
-
 long lastReconnectAttempt = 0;
-
 
 bool wifiReConnect();
 uint16_t littleEndianInt(uint8_t *pData);
+uint16_t bigEndianInt(uint8_t *pData);
+void setupWIFI();
 // for more detailed instructions on these settings, see the EspMQTTClient github repo
 
 static BLEAddress *pServerAddress;
@@ -49,39 +45,45 @@ static BLERemoteCharacteristic *pSettingsCharacteristic;
 static BLERemoteCharacteristic *pAccountAndVerifyCharacteristic;
 static BLERemoteCharacteristic *pSettingsResultsCharacteristic;
 
-
-boolean mqttIsConnected(){
+boolean mqttIsConnected()
+{
   return mqttclient.connected();
 }
 
-boolean mqttReconnect() {
-  if(mqttclient.connect("BBQClient"))
+boolean mqttReconnect()
+{
+  if (mqttclient.connect("BBQClient"))
   {
-      ESP_LOGI("BBQ", "MQTT Connected");
+    ESP_LOGI("BBQ", "MQTT Connected");
   }
   else
-     {
-      ESP_LOGE("BBQ", "MQTT not Connected");
-    }
+  {
+    ESP_LOGE("BBQ", "MQTT not Connected");
+  }
   return mqttIsConnected();
 }
 
-void mqttLoop(){
-    if (!mqttclient.connected()) {
+void mqttLoop()
+{
+  if (!mqttclient.connected())
+  {
     long now = millis();
-    if (now - lastReconnectAttempt > 5000) {
+    if (now - lastReconnectAttempt > 5000)
+    {
       lastReconnectAttempt = now;
       // Attempt to reconnect
-      if (mqttReconnect()) {
+      if (mqttReconnect())
+      {
         lastReconnectAttempt = 0;
       }
     }
-  } else {
+  }
+  else
+  {
     // Client connected
     mqttclient.loop();
   }
 }
-
 
 static void notifyCallback(
     BLERemoteCharacteristic *pBLERemoteCharacteristic,
@@ -95,11 +97,12 @@ static void notifyCallback(
     uint16_t val = littleEndianInt(&pData[i]);
     float temp = val / 10;
     ESP_LOGI("BBQ", "Probe %d has value %f", probeId, temp);
-    if(mqttIsConnected()){
-       char temperature_out[255];
-       sprintf(temperature_out, "inkbird/probe%d",probeId);
-       mqttclient.publish(temperature_out, String((int)temp).c_str());
-       ESP_LOGI("BBQ", "Publish %d to topic %s",(int)temp, temperature_out);
+    if (mqttIsConnected())
+    {
+      char temperature_out[255];
+      sprintf(temperature_out, "inkbird/probe%d", probeId);
+      mqttclient.publish(temperature_out, String((int)temp).c_str());
+      ESP_LOGI("BBQ", "Publish %d to topic %s", (int)temp, temperature_out);
     }
     probeId++;
   }
@@ -111,27 +114,68 @@ static void notifyResultsCallback(
     size_t length,
     bool isNotify)
 {
-  uint16_t currentVoltage= littleEndianInt(&pData[1]); // up to maxVoltage
-  uint16_t maxVoltage= littleEndianInt(&pData[3]); // if 0 maxVoltage is 6550
-  maxVoltage=(maxVoltage==0)?6550:maxVoltage;
-  double battery_percent = (100 * (double)currentVoltage) / (double)maxVoltage;
-  ESP_LOGI("BBQ", "currentVoltage %d::maxVoltage %d::perc %d",currentVoltage, maxVoltage,(int)battery_percent);
-  if(mqttIsConnected()){
-    mqttclient.publish("inkbird/batteryLevel", String((int)battery_percent).c_str());
-    ESP_LOGI("BBQ", "Publish %f to topic %s",battery_percent, "inkbird/batteryLevel");
+  //https://github.com/sworisbreathing/go-ibbq/issues/2
+
+  for (int i = 0; i < length; i++)
+  {
+    Serial.print(pData[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
+
+  switch (pData[0])
+  {
+  case 0x24:
+  {
+    uint16_t currentVoltage = bigEndianInt(&pData[1]); // up to maxVoltage
+    uint16_t maxVoltage = bigEndianInt(&pData[3]);     // if 0 maxVoltage is 6550
+    // maxVoltage = maxVoltage == 0 ? 65535 : maxVoltage;
+    // double battery_percent = 100 * (double)(currentVoltage) / (double)(maxVoltage);
+
+    // uint16_t currentVoltage = littleEndianInt(&pData[1]); // up to maxVoltage
+    // uint16_t maxVoltage = littleEndianInt(&pData[3]);     // if 0 maxVoltage is 6550
+    maxVoltage = maxVoltage == 0 ? 6550 : maxVoltage;
+    double battery_percent = (double)(currentVoltage) / (double)(maxVoltage);
+    battery_percent=100-((battery_percent-1)*100);
+    // double battery_percent = 100 * (double)(currentVoltage / 2000 - 0.3) / (double)(maxVoltage / 2000);
+
+    // currentVoltage := int(binary.BigEndian.Uint16(data[1:3]))
+    // 	maxVoltage := int(binary.BigEndian.Uint16(data[3:5]))
+    // 	if maxVoltage == 0 {
+    // 		maxVoltage = 65535
+    // 	}
+    // 	batteryPct := 100 * currentVoltage / maxVoltage
+    // https://raw.githubusercontent.com/sworisbreathing/go-ibbq/bbc9e2c38f7a697ffd0676d47e620fc2ee36f814/ibbq.go
+
+    // battery_percent = battery_percent - 100;
+
+    ESP_LOGI("BBQ", "currentVoltage %d::maxVoltage %d::perc %d", currentVoltage, maxVoltage, (int)battery_percent);
+    if (mqttIsConnected())
+    {
+      mqttclient.publish("inkbird/batteryLevel", String((int)battery_percent).c_str());
+      ESP_LOGI("BBQ", "Publish %f to topic %s", battery_percent, "inkbird/batteryLevel");
+    }
+
+    break;
+  }
+  default:
+  {
+    ESP_LOGE("BBQ", "unknown ID %X", pData[0]);
+    break;
+  }
   }
 }
 
-
-void getBatteryData(){
-  if (pSettingsCharacteristic != nullptr && pSettingsResultsCharacteristic!=nullptr)
+void getBatteryData()
+{
+  if (pSettingsCharacteristic != nullptr && pSettingsResultsCharacteristic != nullptr)
   {
     ESP_LOGI("BBQ", " Request BatteryStatus");
     pSettingsCharacteristic->writeValue((uint8_t *)batteryLevel, sizeof(batteryLevel), true);
   }
 }
 
-bool connectToServer(BLEAddress pAddress)
+bool connectToBLEServer(BLEAddress pAddress)
 {
   ESP_LOGI("BBQ", "Forming a connection to %s", pAddress.toString().c_str());
 
@@ -197,8 +241,8 @@ bool connectToServer(BLEAddress pAddress)
   pSettingsResultsCharacteristic->registerForNotify(notifyResultsCallback);
 
   getBatteryData();
+  return true;
 }
-
 
 /**
    Scan for BLE servers and find the first one that advertises the service we are looking for.
@@ -227,7 +271,6 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
   }   // onResult
 };    // MyAdvertisedDeviceCallbacks
 
-
 uint16_t littleEndianInt(uint8_t *pData)
 {
   uint16_t val = pData[1] << 8;
@@ -235,14 +278,110 @@ uint16_t littleEndianInt(uint8_t *pData)
   return val;
 }
 
+uint16_t bigEndianInt(uint8_t *pData)
+{
+  uint16_t val = pData[0] << 8;
+  val = val + pData[1];
+  return val;
+}
+
+void ESPHardRestart()
+{
+  esp_task_wdt_init(1, true);
+  esp_task_wdt_add(NULL);
+  while (true)
+    ;
+}
+
+void rebootEspWithReason(String reason)
+{
+  ESP_LOGE("BBQ", "RebootReason: %s", reason.c_str());
+  delay(1000);
+  ESPHardRestart();
+}
+
+bool wifiReConnect()
+{
+  int wifi_retry = 0;
+  while (WiFi.status() != WL_CONNECTED && wifi_retry < 5)
+  {
+    wifi_retry++;
+    // Serial.println("WiFi not connected. Try to reconnect");
+    ESP_LOGE("BBQ", "WiFi not connected. Try to reconnect");
+    WiFi.disconnect();
+    delay(200);
+    WiFi.mode(WIFI_OFF);
+    delay(200);
+    WiFi.mode(WIFI_STA);
+    delay(200);
+    WiFi.begin(DEFAULT_SSID, DEFAULT_WIFIPASSWORD);
+    delay(400);
+  }
+  return (WiFi.status() == WL_CONNECTED);
+}
+
+/**
+  Connect to nTrip Caster
+
+  @param _host Ntrip Server URL
+  @param _httpPort Ntrip Port
+  @param _mountpoint Ntrip Mountpoint.
+  @param _useragent Name of useragent
+  @return none
+*/
+void ETHEvent(WiFiEvent_t event)
+{
+  char buf[20];
+  switch (event)
+  {
+  case SYSTEM_EVENT_STA_CONNECTED:
+    ESP_LOGE("BBQ", "WiFI Connected");
+    break;
+  case SYSTEM_EVENT_STA_GOT_IP:
+    ESP_LOGD("BBQ", "-------------");
+    // sprintf(buf, "%s", ETH.macAddress());
+    // ESP_LOGD("BBQ","ETH MAC: %s\r\n",buf);
+    sprintf(buf, "%d.%d.%d.%d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
+    ESP_LOGD("BBQ", "IPv4: %s", buf);
+    sprintf(buf, "%d.%d.%d.%d", WiFi.subnetMask()[0], WiFi.subnetMask()[1], WiFi.subnetMask()[2], WiFi.subnetMask()[3]);
+    ESP_LOGD("BBQ", "Subnet: %s", buf);
+    sprintf(buf, "%d.%d.%d.%d", WiFi.gatewayIP()[0], WiFi.gatewayIP()[1], WiFi.gatewayIP()[2], WiFi.gatewayIP()[3]);
+    ESP_LOGD("BBQ", "Gateway: %s", buf);
+    sprintf(buf, "%d.%d.%d.%d", WiFi.dnsIP()[0], WiFi.dnsIP()[1], WiFi.dnsIP()[2], WiFi.dnsIP()[3]);
+    ESP_LOGD("BBQ", "DNS1: %s", buf);
+    sprintf(buf, "%d.%d.%d.%d", WiFi.dnsIP(1)[0], WiFi.dnsIP(1)[1], WiFi.dnsIP(1)[2], WiFi.dnsIP(1)[3]);
+    ESP_LOGD("BBQ", "DNS2: %s", buf);
+    ESP_LOGD("BBQ", "-------------");
+    mqttReconnect();
+    ESP_LOGD("BBQ", "mqttReconnect()");
+    break;
+  case SYSTEM_EVENT_STA_DISCONNECTED:
+    ESP_LOGE("BBQ", "STA Disconnected");
+    wifiReConnect();
+    //rebootEspWithReason("SYSTEM_EVENT_STA_DISCONNECTED");
+    break;
+  case SYSTEM_EVENT_STA_STOP:
+    ESP_LOGE("BBQ", "SYSTEM_EVENT_STA_STOP");
+    break;
+  default:
+    break;
+  }
+}
+
+void setupWIFI()
+{
+  WiFi.onEvent(ETHEvent);
+  wifiReConnect();
+}
+
 void setup()
 {
   Serial.begin(115200);
-  wifiReConnect();
-  mqttclient.setServer(MQTTSERVER, MQTTPORT);
-  mqttReconnect();
-  lastReconnectAttempt = 0;
   setLogLevel();
+
+  setupWIFI();
+  mqttclient.setServer(MQTTSERVER, MQTTPORT);
+  lastReconnectAttempt = 0;
   ESP_LOGD("BBQ", "Scanning");
   BLEDevice::init("");
 
@@ -255,15 +394,16 @@ void setup()
   pBLEScan->start(30);
 }
 
+static uint8_t batterycounter = 0;
 void loop()
 {
-  
+
   // If the flag "doConnect" is true then we have scanned for and found the desired
   // BLE Server with which we wish to connect.  Now we connect to it.  Once we are
   // connected we set the connected flag to be true.
   if (doConnect == true)
   {
-    if (connectToServer(*pServerAddress))
+    if (connectToBLEServer(*pServerAddress))
     {
       ESP_LOGI("BBQ", "We are now connected to the BLE Server.");
       connected = true;
@@ -274,29 +414,14 @@ void loop()
     }
     doConnect = false;
   }
-  
-  mqttLoop();
-  getBatteryData();
-  delay(10000); // Delay a second between loops.
-}
 
-bool wifiReConnect()
-{
-  int wifi_retry = 0;
-  while (WiFi.status() != WL_CONNECTED && wifi_retry < 5)
+  mqttLoop();
+  //request battery ever x sec
+  if (batterycounter < 1)
   {
-    wifi_retry++;
-    // Serial.println("WiFi not connected. Try to reconnect");
-    ESP_LOGE("BBQ", "WiFi not connected. Try to reconnect");
-    WiFi.disconnect();
-    delay(100);
-    WiFi.mode(WIFI_OFF);
-    delay(100);
-    WiFi.mode(WIFI_STA);
-    delay(100);
-    WiFi.begin(DEFAULT_SSID, DEFAULT_WIFIPASSWORD);
-    delay(200);
+    getBatteryData();
+    batterycounter = 10;
   }
-  ESP_LOGE("BBQ", "WiFi connected.");
-  return (WiFi.status() == WL_CONNECTED);
+  batterycounter--;
+  delay(10000); // Delay a second between loops.
 }
