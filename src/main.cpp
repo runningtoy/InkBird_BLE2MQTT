@@ -52,10 +52,18 @@ boolean mqttIsConnected()
 
 boolean mqttReconnect()
 {
+  #ifndef MQTTUSER
   if (mqttclient.connect("BBQClient"))
   {
     ESP_LOGI("BBQ", "MQTT Connected");
   }
+  #endif
+  #ifdef MQTTUSER
+  if (mqttclient.connect("BBQClient",MQTTUSER,MQTTPASS))
+  {
+    ESP_LOGI("BBQ", "MQTT Connected");
+  }
+  #endif
   else
   {
     ESP_LOGE("BBQ", "MQTT not Connected");
