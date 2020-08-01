@@ -14,6 +14,8 @@
 #include <esp_int_wdt.h>
 #include <esp_task_wdt.h>
 
+#define PROBEERRORVALUE 6550 //ERROR Value, if Probe Value greater than this Value it is not published
+
 WiFiClient espClient;
 PubSubClient mqttclient(espClient);
 
@@ -105,15 +107,45 @@ static void notifyCallback(
     uint16_t val = littleEndianInt(&pData[i]);
     float temp = val / 10;
     ESP_LOGI("BBQ", "Probe %d has value %f", probeId, temp);
-    if (mqttIsConnected())
+    if(((int)temp)<PROBEERRORVALUE)
     {
-      char temperature_out[255];
-      sprintf(temperature_out, "inkbird/probe%d", probeId);
-      mqttclient.publish(temperature_out, String((int)temp).c_str());
-      ESP_LOGI("BBQ", "Publish %d to topic %s", (int)temp, temperature_out);
+      if (mqttIsConnected())
+      {
+        char temperature_out[255];
+        sprintf(temperature_out, "inkbird/probe%d", probeId);
+        mqttclient.publish(temperature_out, String((int)temp).c_str());
+        ESP_LOGI("BBQ", "Publish %d to topic %s", (int)temp, temperature_out);
+      }
     }
     probeId++;
   }
+}
+
+
+// Batterylevel: https://github.com/sworisbreathing/go-ibbq/issues/2#issuecomment-650725433
+int getiBBQBatteryPercentage(uint16_t current,double maxVoltage)
+{
+  //const int voltages[] = {5580, 5595, 5609, 5624, 5639, 5644, 5649, 5654, 5661, 5668, 5676, 5683, 5698, 5712, 5727, 5733, 5739, 5744, 5750, 5756, 5759, 5762, 5765, 5768, 5771, 5774, 5777, 5780, 5783, 5786, 5789, 5792, 5795, 5798, 5801, 5807, 5813, 5818, 5824, 5830, 5830, 5830, 5835, 5840, 5845, 5851, 5857, 5864, 5870, 5876, 5882, 5888, 5894, 5900, 5906, 5915, 5924, 5934, 5943, 5952, 5961, 5970, 5980, 5989, 5998, 6007, 6016, 6026, 6035, 6044, 6052, 6062, 6072, 6081, 6090, 6103, 6115, 6128, 6140, 6153, 6172, 6191, 6211, 6230, 6249, 6265, 6280, 6285, 6290, 6295, 6300, 6305, 6310, 6315, 6320, 6325, 6330, 6335, 6340, 6344};
+  const uint16_t voltages[] = {5580, 5595, 5609, 5624, 5639, 5644, 5649, 5654, 5661, 5668, 5676, 5683, 5698, 5712, 5727, 5733, 5739, 5744, 5750, 5756, 5759, 5762, 5765, 5768, 5771, 5774, 5777, 5780, 5783, 5786, 5789, 5792, 5795, 5798, 5801, 5807, 5813, 5818, 5824, 5830, 5830, 5830, 5835, 5840, 5845, 5851, 5857, 5864, 5870, 5876, 5882, 5888, 5894, 5900, 5906, 5915, 5924, 5934, 5943, 5952, 5961, 5970, 5980, 5989, 5998, 6007, 6016, 6026, 6035, 6044, 6052, 6062, 6072, 6081, 6090, 6103, 6115, 6128, 6140, 6153, 6172, 6191, 6211, 6230, 6249, 6265, 6280, 6296, 6312, 6328, 6344, 6360, 6370, 6381, 6391, 6407, 6423, 6431, 6439, 6455};
+  int length = sizeof(voltages)/sizeof(uint16_t);
+  double factor = maxVoltage / 6550.0;
+
+  if (current > voltages[length - 1]*factor)
+  {
+    return 100;
+  }
+
+  if (current <= voltages[0]*factor)
+  {
+    return 0;
+  }
+  int i = 0;
+  while ((current > (voltages[i]*factor)) && (i < length))
+  {
+    if(i>100){return 100;}
+    i++;
+  }
+  return i;
 }
 
 static void notifyResultsCallback(
@@ -122,8 +154,7 @@ static void notifyResultsCallback(
     size_t length,
     bool isNotify)
 {
-  //https://github.com/sworisbreathing/go-ibbq/issues/2
-
+  
   for (int i = 0; i < length; i++)
   {
     Serial.print(pData[i], HEX);
@@ -135,27 +166,10 @@ static void notifyResultsCallback(
   {
   case 0x24:
   {
-    uint16_t currentVoltage = bigEndianInt(&pData[1]); // up to maxVoltage
-    uint16_t maxVoltage = bigEndianInt(&pData[3]);     // if 0 maxVoltage is 6550
-    // maxVoltage = maxVoltage == 0 ? 65535 : maxVoltage;
-    // double battery_percent = 100 * (double)(currentVoltage) / (double)(maxVoltage);
-
-    // uint16_t currentVoltage = littleEndianInt(&pData[1]); // up to maxVoltage
-    // uint16_t maxVoltage = littleEndianInt(&pData[3]);     // if 0 maxVoltage is 6550
+    uint16_t currentVoltage = littleEndianInt(&pData[1]); // up to maxVoltage
+    uint16_t maxVoltage = littleEndianInt(&pData[3]);     // if 0 maxVoltage is 6550
     maxVoltage = maxVoltage == 0 ? 6550 : maxVoltage;
-    double battery_percent = (double)(currentVoltage) / (double)(maxVoltage);
-    battery_percent=100-((battery_percent-1)*100);
-    // double battery_percent = 100 * (double)(currentVoltage / 2000 - 0.3) / (double)(maxVoltage / 2000);
-
-    // currentVoltage := int(binary.BigEndian.Uint16(data[1:3]))
-    // 	maxVoltage := int(binary.BigEndian.Uint16(data[3:5]))
-    // 	if maxVoltage == 0 {
-    // 		maxVoltage = 65535
-    // 	}
-    // 	batteryPct := 100 * currentVoltage / maxVoltage
-    // https://raw.githubusercontent.com/sworisbreathing/go-ibbq/bbc9e2c38f7a697ffd0676d47e620fc2ee36f814/ibbq.go
-
-    // battery_percent = battery_percent - 100;
+    double battery_percent = getiBBQBatteryPercentage(currentVoltage,maxVoltage);
 
     ESP_LOGI("BBQ", "currentVoltage %d::maxVoltage %d::perc %d", currentVoltage, maxVoltage, (int)battery_percent);
     if (mqttIsConnected())
@@ -328,15 +342,7 @@ bool wifiReConnect()
   return (WiFi.status() == WL_CONNECTED);
 }
 
-/**
-  Connect to nTrip Caster
 
-  @param _host Ntrip Server URL
-  @param _httpPort Ntrip Port
-  @param _mountpoint Ntrip Mountpoint.
-  @param _useragent Name of useragent
-  @return none
-*/
 void ETHEvent(WiFiEvent_t event)
 {
   char buf[20];
